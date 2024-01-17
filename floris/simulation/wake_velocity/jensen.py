@@ -1,4 +1,4 @@
-# Copyright 2020 NREL
+# Copyright 2021 NREL
 
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not
 # use this file except in compliance with the License. You may obtain a copy of
@@ -10,154 +10,124 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
+from typing import Any, Dict
+
+import numexpr as ne
 import numpy as np
+from attrs import define, field
 
-from .base_velocity_deficit import VelocityDeficit
+from floris.simulation import (
+    BaseModel,
+    Farm,
+    FlowField,
+    Grid,
+    Turbine,
+)
 
 
-class Jensen(VelocityDeficit):
+@define
+class JensenVelocityDeficit(BaseModel):
     """
     The Jensen model computes the wake velocity deficit based on the classic
     Jensen/Park model :cite:`jvm-jensen1983note`.
 
+    -   **we** (*float*): The linear wake decay constant that
+        defines the cone boundary for the wake as well as the
+        velocity deficit. D/2 +/- we*x is the cone boundary for the
+        wake.
+
     References:
-        .. bibliography:: /source/zrefs.bib
+        .. bibliography:: /references.bib
             :style: unsrt
             :filter: docname in docnames
             :keyprefix: jvm-
     """
 
-    default_parameters = {"we": 0.05}
+    we: float = field(converter=float, default=0.05)
 
-    def __init__(self, parameter_dictionary):
+    def prepare_function(
+        self,
+        grid: Grid,
+        flow_field: FlowField,
+    ) -> Dict[str, Any]:
         """
-        Stores model parameters for use by methods.
-
-        Args:
-            parameter_dictionary (dict): Model-specific parameters.
-                Default values are used when a parameter is not included
-                in `parameter_dictionary`. Possible key-value pairs include:
-
-                -   **we** (*float*): The linear wake decay constant that
-                    defines the cone boundary for the wake as well as the
-                    velocity deficit. D/2 +/- we*x is the cone boundary for the
-                    wake.
+        This function prepares the inputs from the various FLORIS data structures
+        for use in the Jensen model. This should only be used to 'initialize'
+        the inputs. For any data that should be updated successively,
+        do not use this function and instead pass that data directly to
+        the model function.
         """
-        super().__init__(parameter_dictionary)
-        self.model_string = "jensen"
-        model_dictionary = self._get_model_dict(__class__.default_parameters)
-        self.we = float(model_dictionary["we"])
+        kwargs = {
+            "x": grid.x_sorted,
+            "y": grid.y_sorted,
+            "z": grid.z_sorted,
+        }
+        return kwargs
 
+    # @profile
     def function(
         self,
-        x_locations,
-        y_locations,
-        z_locations,
-        turbine,
-        turbine_coord,
-        deflection_field,
-        flow_field,
-    ):
-        """
-        Using the Jensen wake model, this method calculates and returns
-        the wake velocity deficits, caused by the specified turbine,
-        relative to the freestream velocities at the grid of points
-        comprising the wind farm flow field.
+        x_i: np.ndarray,
+        y_i: np.ndarray,
+        z_i: np.ndarray,
+        axial_induction_i: np.ndarray,
+        deflection_field_i: np.ndarray,
+        yaw_angle_i: np.ndarray,
+        turbulence_intensity_i: np.ndarray,
+        ct_i: np.ndarray,
+        hub_height_i,
+        rotor_diameter_i,
+        # enforces the use of the below as keyword arguments and adherence to the
+        # unpacking of the results from prepare_function()
+        *,
+        x: np.ndarray,
+        y: np.ndarray,
+        z: np.ndarray,
+    ) -> None:
 
-        Args:
-            x_locations (np.array): An array of floats that contains the
-                streamwise direction grid coordinates of the flow field
-                domain (m).
-            y_locations (np.array): An array of floats that contains the grid
-                coordinates of the flow field domain in the direction normal to
-                x and parallel to the ground (m).
-            z_locations (np.array): An array of floats that contains the grid
-                coordinates of the flow field domain in the vertical
-                direction (m).
-            turbine (:py:obj:`floris.simulation.turbine`): Object that
-                represents the turbine creating the wake.
-            turbine_coord (:py:obj:`floris.utilities.Vec3`): Object containing
-                the coordinate of the turbine creating the wake (m).
-            deflection_field (np.array): An array of floats that contains the
-                amount of wake deflection in meters in the y direction at each
-                grid point of the flow field.
-            flow_field (:py:class:`floris.simulation.flow_field`): Object
-                containing the flow field information for the wind farm.
+        # u is 4-dimensional (n wind speeds, n turbines, grid res 1, grid res 2)
+        # velocities is 3-dimensional (n turbines, grid res 1, grid res 2)
 
-        Returns:
-            np.array, np.array, np.array:
-                Three arrays of floats that contain the wake velocity
-                deficit in m/s created by the turbine relative to the freestream
-                velocities for the U, V, and W components, aligned with the
-                x, y, and z directions, respectively. The three arrays contain
-                the velocity deficits at each grid point in the flow field.
-        """
+        # TODO: check the rotations with multiple directions or non-0/270
+        # grid.rotate_fields(flow_field.wind_directions)
 
-        # define the boundary of the wake model ... y = mx + b
-        m = self.we
-        x = x_locations - turbine_coord.x1
-        b = turbine.rotor_radius
+        # Calculate and apply wake mask
+        # x = grid.x_sorted # mesh_x_rotated - x_coord_rotated
 
-        boundary_line = m * x + b
+        # This is the velocity deficit seen by the i'th turbine due to wake effects
+        # from upstream turbines.
+        # Indeces of velocity_deficit corresponding to unwaked turbines will have 0's
+        # velocity_deficit = np.zeros(np.shape(flow_field.u_initial))
 
-        y_upper = boundary_line + turbine_coord.x2 + deflection_field
-        y_lower = -1 * boundary_line + turbine_coord.x2 + deflection_field
+        rotor_radius = rotor_diameter_i / 2.0
 
-        z_upper = boundary_line + turbine.hub_height
-        z_lower = -1 * boundary_line + turbine.hub_height
+        # Numexpr - do not change below without corresponding changes above.
+        dx = ne.evaluate("x - x_i")
+        dy = ne.evaluate("y - y_i - deflection_field_i")
+        dz = ne.evaluate("z - z_i")
 
-        # calculate the wake velocity
-        c = (
-            turbine.rotor_diameter
-            / (2 * self.we * (x_locations - turbine_coord.x1) + turbine.rotor_diameter)
-        ) ** 2
+        we = self.we
+        NUM_EPS = JensenVelocityDeficit.NUM_EPS
 
-        # filter points upstream and beyond the upper and
-        # lower bounds of the wake
-        c[x_locations - turbine_coord.x1 < 0] = 0
-        c[y_locations > y_upper] = 0
-        c[y_locations < y_lower] = 0
-        c[z_locations > z_upper] = 0
-        c[z_locations < z_lower] = 0
+        # Construct a boolean mask to include all points downstream of the turbine
+        downstream_mask = ne.evaluate("dx > 0 + NUM_EPS")
 
-        return (
-            2 * turbine.aI * c * flow_field.u_initial,
-            np.zeros(np.shape(flow_field.u_initial)),
-            np.zeros(np.shape(flow_field.u_initial)),
+        # Construct a boolean mask to include all points within the wake boundary
+        # as defined by the Jensen model. This is a linear wake expansion that makes
+        # a shape like a cone and starts at the turbine disc.
+        # The left side of the inequality below evaluates the distance from the wake centerline
+        # for all points including positive and negative values. The inequality compares distance
+        # from the centerline and it must be below the line defined by the wake
+        # expansion parameter, "we".
+        boundary_mask = ne.evaluate("sqrt(dy ** 2 + dz ** 2) < we * dx + rotor_radius")
+
+        # Calculate C for points within the mask and fill points outside with 0
+        c = np.where(
+            np.logical_and(downstream_mask, boundary_mask),
+            ne.evaluate("(rotor_radius / (rotor_radius + we * dx + NUM_EPS)) ** 2"),  # This is "C"
+            0.0,
         )
 
-    @property
-    def we(self):
-        """
-        The linear wake decay constant that defines the cone boundary for the
-        wake as well as the velocity deficit. D/2 +/- we*x is the cone boundary
-        for the wake.
+        velocity_deficit = ne.evaluate("2 * axial_induction_i * c")
 
-        **Note:** This is a virtual property used to "get" or "set" a value.
-
-        Args:
-            value (float): Value to set.
-
-        Returns:
-            float: Value currently set.
-
-        Raises:
-            ValueError: Invalid value.
-        """
-        return self._we
-
-    @we.setter
-    def we(self, value):
-        if type(value) is not float:
-            err_msg = (
-                "Invalid value type given for we: {}, " + "expected float."
-            ).format(value)
-            self.logger.error(err_msg, stack_info=True)
-            raise ValueError(err_msg)
-        self._we = value
-        if value != __class__.default_parameters["we"]:
-            self.logger.info(
-                (
-                    "Current value of we, {0}, is not equal to tuned " + "value of {1}."
-                ).format(value, __class__.default_parameters["we"])
-            )
+        return velocity_deficit

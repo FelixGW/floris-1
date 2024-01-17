@@ -1,4 +1,4 @@
-# Copyright 2020 NREL
+# Copyright 2021 NREL
 
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not
 # use this file except in compliance with the License. You may obtain a copy of
@@ -11,21 +11,22 @@
 # the License.
 
 import numpy as np
+from attrs import define
 
-from .base_wake_combination import WakeCombination
+from floris.simulation import BaseModel
 
 
-class SOSFS(WakeCombination):
+@define
+class SOSFS(BaseModel):
     """
     SOSFS uses sum of squares freestream superposition to combine the
     wake velocity deficits to the base flow field.
     """
 
-    def __init__(self):
-        super().__init__()
-        self.model_string = "sosfs"
+    def prepare_function(self) -> dict:
+        pass
 
-    def function(self, u_field, u_wake):
+    def function(self, wake_field: np.ndarray, velocity_field: np.ndarray):
         """
         Combines the base flow field with the velocity defecits
         using sum of squares.
@@ -38,4 +39,4 @@ class SOSFS(WakeCombination):
             np.array: The resulting flow field after applying the wake to the
                 base.
         """
-        return np.hypot(u_wake, u_field)
+        return np.hypot(wake_field, velocity_field)

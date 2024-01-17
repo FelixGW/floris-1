@@ -1,4 +1,4 @@
-# Copyright 2020 NREL
+# Copyright 2021 NREL
 
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not
 # use this file except in compliance with the License. You may obtain a copy of
@@ -18,10 +18,10 @@ import re
 import numpy as np
 import pandas as pd
 
+from ..logging_manager import LoggerBase
+from ..utilities import Vec3
 from .cut_plane import CutPlane, get_plane_from_flow_data
 from .flow_data import FlowData
-from ..utilities import Vec3
-from ..logging_manager import LoggerBase
 
 
 class SowfaInterface(LoggerBase):
@@ -206,7 +206,7 @@ class SowfaInterface(LoggerBase):
 
         return " "
 
-    def get_hor_plane(
+    def calculate_horizontal_plane(
         self, height, x_resolution=200, y_resolution=200, x_bounds=None, y_bounds=None
     ):
         """
@@ -235,7 +235,7 @@ class SowfaInterface(LoggerBase):
         # Compute and return the cutplane
         return CutPlane(df)
 
-    def get_cross_plane(
+    def calculate_cross_plane(
         self, x_loc, x_resolution=200, y_resolution=200, x_bounds=None, y_bounds=None
     ):
         """
@@ -262,7 +262,7 @@ class SowfaInterface(LoggerBase):
         # Compute and return the cutplane
         return CutPlane(df)
 
-    def get_y_plane(
+    def calculate_y_plane(
         self, y_loc, x_resolution=200, y_resolution=200, x_bounds=None, y_bounds=None
     ):
         """
@@ -299,7 +299,7 @@ class SowfaInterface(LoggerBase):
         Returns:
             pow_list (numpy array): an array of powers per turbine
         """
-        pow_list = list()
+        pow_list = []
         for t in range(self.num_turbines):
             df_sub = self.turbine_output[self.turbine_output.turbine == t]
             pow_list.append(df_sub.powerGenerator.mean())
@@ -327,7 +327,7 @@ class SowfaInterface(LoggerBase):
         Returns:
             pow_list (numpy array): an array of thrust per turbine
         """
-        thrust_list = list()
+        thrust_list = []
         for t in range(self.num_turbines):
             df_sub = self.turbine_output[self.turbine_output.turbine == t]
             thrust_list.append(df_sub.thrust.mean())
@@ -443,17 +443,17 @@ def read_sowfa_df(folder_name, channels=[]):
     ]
 
     # Remove the harder input files for now (undo someday)
-    hardFiles = [
-        "Vtangential",
-        "Cl",
-        "Cd",
-        "Vradial",
-        "x",
-        "y",
-        "z",
-        "alpha",
-        "axialForce",
-    ]
+    # hardFiles = [
+    #     "Vtangential",
+    #     "Cl",
+    #     "Cd",
+    #     "Vradial",
+    #     "x",
+    #     "y",
+    #     "z",
+    #     "alpha",
+    #     "axialForce",
+    # ]
     simpleFiles = [
         "nacYaw",
         "rotSpeedFiltered",
@@ -527,7 +527,6 @@ def read_foam_file(filename):
     with open(filename, "r") as fid:
         raw = fid.readlines()
 
-    count = 0
     bloc_comment_test = False
     for i, line in enumerate(raw):
 
@@ -547,13 +546,13 @@ def read_foam_file(filename):
                 tmp = raw[i].strip().rstrip().split()
                 try:
                     data[tmp[0].replace('"', "")] = np.float(tmp[1][:-1])
-                except:
+                except Exception:
                     try:
                         data[tmp[0].replace('"', "")] = tmp[1][:-1]
-                    except:
+                    except Exception:
                         next
 
-        if raw[i][0:2] == "\*":
+        if raw[i][0:2] == r"\*":
             bloc_comment_test = False
 
     return data
@@ -571,8 +570,8 @@ def get_turbine_locations(turbine_array_file):
         layout_x (np.array): wind plant layout coodinates (east-west).
         layout_y (np.array): wind plant layout coodinates (north-south).
     """
-    x = list()
-    y = list()
+    x = []
+    y = []
 
     with open(turbine_array_file, "r") as f:
         for line in f:
@@ -600,7 +599,7 @@ def get_turbine_pitch_angles(turbine_array_file):
     Returns:
         p (np.array): blade pitch info.
     """
-    p = list()
+    p = []
 
     with open(turbine_array_file, "r") as f:
         for line in f:
@@ -626,7 +625,7 @@ def get_turbine_yaw_angles(turbine_array_file, wind_direction=270.0):
     Returns:
         y (np.array): wind turbine yaw info.
     """
-    y = list()
+    y = []
 
     with open(turbine_array_file, "r") as f:
         for line in f:

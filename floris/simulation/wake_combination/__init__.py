@@ -1,4 +1,4 @@
-# Copyright 2020 NREL
+# Copyright 2021 NREL
 
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not
 # use this file except in compliance with the License. You may obtain a copy of
@@ -9,3 +9,10 @@
 # WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 # License for the specific language governing permissions and limitations under
 # the License.
+
+# See https://floris.readthedocs.io for documentation
+
+
+from floris.simulation.wake_combination.fls import FLS
+from floris.simulation.wake_combination.max import MAX
+from floris.simulation.wake_combination.sosfs import SOSFS

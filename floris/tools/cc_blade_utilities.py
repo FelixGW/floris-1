@@ -1,12 +1,12 @@
 # functions to couple floris with CCBlade and a controller
 
-import os
 import copy
+import os
 import pickle
 from os import path
 
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
 from scipy import interpolate
 
 import floris.tools as wfct
@@ -23,7 +23,7 @@ except ImportError:
         + "installation instructions."
     )
     logger = LoggerBase()
-    logger.error(err_msg, stack_info=True)
+    logger.logger.error(err_msg, stack_info=True)
     raise ImportError(err_msg)
 
 
@@ -31,6 +31,7 @@ except ImportError:
 degRad = np.pi / 180.0
 rpmRadSec = 2.0 * (np.pi) / 60.0
 base_R = 63.0  # Actual NREL 5MW radius
+
 
 # Function returns a scaled NREL 5MW rotor object from CC-Blade
 def CCrotor(
@@ -158,7 +159,8 @@ def CCrotor(
 
 
 # Return the demanded generator torque for a given gen speed
-# This is based on the torque controller within SOWFA and using the control parameters within the SOWFA example
+# This is based on the torque controller within SOWFA and using the
+# control parameters within the SOWFA example
 def trq_cont(turbine_dict, genSpeedF):
     """
     Compute the torque control at a given gen speed (based on SOWFA)
@@ -216,7 +218,8 @@ def trq_cont(turbine_dict, genSpeedF):
 
 
 # Update the PI pitch controller
-# This is based on the pitch controller within SOWFA and using the control parameters within the SOWFA example
+# This is based on the pitch controller within SOWFA and using the control
+# parameters within the SOWFA example
 def pitch_control(turbine_dict, rotSpeedF, pitch_prev, dt, intSpeedError):
     min_pitch = 0.0
     max_pitch = 90.0
@@ -249,7 +252,7 @@ def pitch_control(turbine_dict, rotSpeedF, pitch_prev, dt, intSpeedError):
     pitchP = GK * turbine_dict["PitchControlKP"] * speedError
     pitchI = GK * turbine_dict["PitchControlKI"] * intSpeedError
     # scalar pitchD = GK * PitchControlKD[j] * derivSpeedError;
-    pitchCommanded = pitchP + pitchI  #  + pitchD;
+    pitchCommanded = pitchP + pitchI  # + pitchD;
 
     # Saturate the pitch based on the pitch limits of the pitch
     # actuator.
@@ -330,9 +333,9 @@ def show_torque_curve(turbine_dict, ax, label="_nolegend_"):
 def generate_base_lut(rotor, turbine_dict):
 
     # These dicts (keyed on yaw)
-    cp_dict = dict()
-    ct_dict = dict()
-    cq_dict = dict()
+    cp_dict = {}
+    ct_dict = {}
+    cq_dict = {}
 
     # for now, assume only one yaw angle, perhaps expand later
     yaw = 0.0
@@ -347,7 +350,7 @@ def generate_base_lut(rotor, turbine_dict):
     ws_flat = ws_mesh.flatten()
     pitch_flat = pitch_mesh.flatten()
     omega_flat = np.ones_like(pitch_flat) * fixed_rpm
-    tsr_flat = (fixed_rpm * (np.pi / 30.0) * Rtip) / ws_flat
+    # tsr_flat = (fixed_rpm * (np.pi / 30.0) * Rtip) / ws_flat
 
     # Get values from cc-blade
     outputs, derivs = rotor.evaluate(
@@ -479,7 +482,7 @@ def get_steady_state(
     cp_dict, ct_dict, cq_dict = pickle.load(open("cp_ct_cq_lut.p", "rb"))
 
     # Select the 0-yaw LUT
-    cq_lut = cq_dict[0]
+    # cq_lut = cq_dict[0]
 
     # Now loop through and get the values
     re_run = True
@@ -502,12 +505,12 @@ def get_steady_state(
                     [pitch[i - 1]],
                     coefficients=True,
                 )
-                M = outputs["M"]
+                # M = outputs["M"]
                 Cp = outputs["CP"]
                 Ct = outputs["CT"]
                 cq = outputs["CQ"]
 
-            except:
+            except Exception:
                 print("CC BLADE PROBLEM")
                 if i > 0:
                     return gen_power[i - 1], cp_array[i - 1], ct_array[i - 1]
@@ -610,9 +613,9 @@ def get_steady_state(
 def get_wind_sweep_steady_values(turbine_dict, rotor, ws_array=np.arange(3, 21, 1.0)):
 
     # Get the steady values
-    pow_array = list()
-    cp_array = list()
-    ct_array = list()
+    pow_array = []
+    cp_array = []
+    ct_array = []
 
     for ws in ws_array:
         print(ws)

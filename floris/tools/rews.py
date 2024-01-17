@@ -1,4 +1,4 @@
-# Copyright 2020 NREL
+# Copyright 2021 NREL
 
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not
 # use this file except in compliance with the License. You may obtain a copy of
@@ -47,11 +47,7 @@ def determine_rews_weights(R, HH, heights_in):
     Returns:
         weights_return (list): list of weighting values for REWS.
     """
-    # Determine rotor area
-    Area = np.pi * R ** 2
-
     # Remove any heights not in range of the rotor
-    num_heights_in = len(heights_in)
     heights = [h for h in heights_in if ((h >= HH - R) and (h <= HH + R))]
     num_heights = len(heights)
 
@@ -68,7 +64,7 @@ def determine_rews_weights(R, HH, heights_in):
     alpha = np.arcsin(h / R)
     C = np.pi - 2 * alpha
     A = ((R ** 2) / 2) * (C - np.sin(C))
-    A = [np.pi * R ** 2] + [a for a in A]
+    A = [np.pi * R ** 2] + list(A)
     for i in range(num_heights - 1):
         A[i] = A[i] - A[i + 1]
     weights = A

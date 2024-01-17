@@ -1,4 +1,4 @@
-# Copyright 2020 NREL
+# Copyright 2021 NREL
 
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not
 # use this file except in compliance with the License. You may obtain a copy of
@@ -15,9 +15,9 @@
 
 import copy
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 from scipy.interpolate import griddata
 
 
@@ -105,7 +105,7 @@ class CutPlane:
     FLORIS simulation, or other such as SOWFA result.
     """
 
-    def __init__(self, df):
+    def __init__(self, df, x1_resolution, x2_resolution, normal_vector):
         """
         Initialize CutPlane object, storing the DataFrame and resolution.
 
@@ -113,10 +113,33 @@ class CutPlane:
             df (pandas.DataFrame): Pandas DataFrame of data with
                 columns x1, x2, u, v, w.
         """
-        self.df = df
+        self.df: pd.DataFrame = df
+        self.normal_vector: str = normal_vector
+        self.resolution = (x1_resolution, x2_resolution)
+        self.df.set_index(["x1", "x2"])
 
-        # Save the resolution as the number of unique points in x1 and x2
-        self.resolution = (len(self.df.x1.unique()), len(self.df.x2.unique()))
+    def __sub__(self, other):
+
+        if self.normal_vector != other.normal_vector:
+            raise ValueError("Operands must have consistent normal vectors.")
+
+        # if self.normal_vector.df.
+        # DF must be of the same size
+        # resolution must be of the same size
+
+        df: pd.DataFrame = self.df.copy()
+        other_df: pd.DataFrame = other.df.copy()
+
+        df['u'] = self.df['u'] - other_df['u']
+        df['v'] = self.df['v'] - other_df['v']
+        df['w'] = self.df['w'] - other_df['w']
+
+        return CutPlane(
+            df,
+            self.resolution[0],
+            self.resolution[1],
+            self.normal_vector
+        )
 
 
 # Modification functions
@@ -324,113 +347,102 @@ def project_onto(cut_plane_a, cut_plane_b):
     )
 
 
-def subtract(cut_plane_a_in, cut_plane_b_in):
+def calculate_wind_speed(cross_plane, x1_loc, x2_loc, R):
     """
-    Subtract u,v,w terms of cut_plane_b from cut_plane_a
+    Calculate effective wind speed within specified range of a point.
 
     Args:
-        cut_plane_a_in (:py:class:`~.tools.cut_plane.CutPlane`):
-            Plane of data to subtract from.
-        cut_plane_b_in (:py:class:`~.tools.cut_plane.CutPlane`):
-            Plane of data to subtract b.
+        cross_plane (:py:class:`floris.tools.cut_plane.CrossPlane`):
+            plane of data.
+        x1_loc (float): x1-coordinate of point of interst.
+        x2_loc (float): x2-coordinate of point of interst.
+        R (float): radius from point of interst to consider
 
     Returns:
-        cut_plane (:py:class:`~.tools.cut_plane.CutPlane`):
-            Difference of cut_plane_a_in minus cut_plane_b_in.
+        (float): effective wind speed
     """
 
-    # First make copies of original
-    cut_plane_a = copy.deepcopy(cut_plane_a_in)
-    cut_plane_b = copy.deepcopy(cut_plane_b_in)
+    # Temp local copy
+    df = cross_plane.df.copy()
 
-    # Sort x1 and x2 and make the index
-    cut_plane_a.df = cut_plane_a.df.set_index(["x1", "x2"])
-    cut_plane_b.df = cut_plane_b.df.set_index(["x1", "x2"])
+    # Make a distance column
+    df["distance"] = np.sqrt((df.x1 - x1_loc) ** 2 + (df.x2 - x2_loc) ** 2)
 
-    # Do subtraction
-    cut_plane_a.df = cut_plane_a.df.subtract(
-        cut_plane_b.df
-    ).reset_index()  # .sort_values(['x2','x1'])# .dropna()
-    # cut_plane_a.df = cut_plane_a.df.sort_values(['x1','x2'])
-    return cut_plane_a
+    # Return the cube-mean wind speed
+    return np.cbrt(np.mean(df[df.distance < R].u ** 3))
 
 
-# def calculate_wind_speed(cross_plane, x1_loc, x2_loc, R):
-#     """
-#     Calculate effective wind speed within specified range of a point.
+def wind_speed_profile(cross_plane, R, x2_loc, resolution=100, x1_locs=None):
 
-#     Args:
-#         cross_plane (:py:class:`floris.tools.cut_plane.CrossPlane`):
-#             plane of data.
-#         x1_loc (float): x1-coordinate of point of interst.
-#         x2_loc (float): x2-coordinate of point of interst.
-#         R (float): radius from point of interst to consider
-
-#     Returns:
-#         (float): effective wind speed
-#     """
-#     # Make a distance column
-#     distance = np.sqrt((cross_plane.x1_flat - x1_loc)**2 +
-#                        (cross_plane.x2_flat - x2_loc)**2)
-
-#     # Return the mean wind speed
-#     return np.cbrt(np.mean(cross_plane.u_cubed[distance < R]))
-
-# def wind_speed_profile(cross_plane,
-#                         R,
-#                         x2_loc,
-#                         resolution=100,
-#                         x1_locs=None):
-
-#     if x1_locs is None:
-#         x1_locs = np.linspace(
-#             min(cross_plane.x1_flat), max(cross_plane.x1_flat), resolution)
-#     v_array = np.array([calculate_wind_speed(cross_plane,x1_loc, x2_loc, R) for x1_loc in x1_locs])
-#     return x1_locs, v_array
-
-# def calculate_power(cross_plane,
-#                     x1_loc,
-#                     x2_loc,
-#                     R,
-#                     ws_array,
-#                     cp_array,
-#                     air_density=1.225):
-#     """
-#     Calculate maximum power available in a given cross plane.
-
-#     Args:
-#         cross_plane (:py:class:`floris.tools.cut_plane.CrossPlane`):
-#             plane of data.
-#         x1_loc (float): x1-coordinate of point of interst.
-#         x2_loc (float): x2-coordinate of point of interst.
-#         R (float): Radius of wind turbine rotor.
-#         ws_array (np.array): reference wind speed for cp curve.
-#         cp_array (np.array): cp curve at reference wind speeds.
-#         air_density (float, optional): air density. Defaults to 1.225.
-
-#     Returns:
-#         float: Power!
-#     """
-#     # Compute the ws
-#     ws = calculate_wind_speed(cross_plane, x1_loc, x2_loc, R)
-
-#     # Compute the cp
-#     cp_value = np.interp(ws, ws_array, cp_array)
-
-#     #Return the power
-#     return 0.5 * air_density * (np.pi * R**2) * cp_value * ws**3
+    if x1_locs is None:
+        x1_locs = np.linspace(
+            min(cross_plane.df.x1), max(cross_plane.df.x1), resolution
+        )
+    v_array = np.array(
+        [calculate_wind_speed(cross_plane, x1_loc, x2_loc, R) for x1_loc in x1_locs]
+    )
+    return x1_locs, v_array
 
 
-#     # def get_power_profile(self, ws_array, cp_array, rotor_radius, air_density=1.225, resolution=100, x1_locs=None):
+def calculate_power(
+    cross_plane, x1_loc, x2_loc, R, ws_array, cp_array, air_density=1.225
+):
+    """
+    Calculate maximum power available in a given cross plane.
 
-#     #     # Get the wind speed profile
-#     #     x1_locs, v_array = self.get_profile(resolution=resolution, x1_locs=x1_locs)
+    Args:
+        cross_plane (:py:class:`floris.tools.cut_plane.CrossPlane`):
+            plane of data.
+        x1_loc (float): x1-coordinate of point of interst.
+        x2_loc (float): x2-coordinate of point of interst.
+        R (float): Radius of wind turbine rotor.
+        ws_array (np.array): reference wind speed for cp curve.
+        cp_array (np.array): cp curve at reference wind speeds.
+        air_density (float, optional): air density. Defaults to 1.225.
 
-#     #     # Get Cp
-#     #     cp_array = np.interp(v_array,ws_array,cp_array)
+    Returns:
+        float: Power!
+    """
+    # Compute the ws
+    ws = calculate_wind_speed(cross_plane, x1_loc, x2_loc, R)
 
-#     #     # Return power array
-#     #     return x1_locs, 0.5 * air_density * (np.pi * rotor_radius**2) * cp_array * v_array**3
+    # Compute the cp
+    cp_value = np.interp(ws, ws_array, cp_array)
+
+    # Return the power
+    return 0.5 * air_density * (np.pi * R ** 2) * cp_value * ws ** 3
+
+
+def get_power_profile(
+    cross_plane,
+    x2_loc,
+    ws_array,
+    cp_array,
+    R,
+    air_density=1.225,
+    resolution=100,
+    x1_locs=None,
+):
+
+    if x1_locs is None:
+        x1_locs = np.linspace(
+            min(cross_plane.df.x1), max(cross_plane.df.x1), resolution
+        )
+    p_array = np.array(
+        [
+            calculate_power(
+                cross_plane,
+                x1_loc,
+                x2_loc,
+                R,
+                ws_array,
+                cp_array,
+                air_density=air_density,
+            )
+            for x1_loc in x1_locs
+        ]
+    )
+    return x1_locs, p_array
 
 
 # # Define horizontal subclass

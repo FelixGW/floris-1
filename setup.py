@@ -1,4 +1,4 @@
-# Copyright 2020 NREL
+# Copyright 2021 NREL
 
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not
 # use this file except in compliance with the License. You may obtain a copy of
@@ -13,18 +13,9 @@
 # See https://floris.readthedocs.io for documentation
 
 
-# This setup file was taken from https://github.com/kennethreitz/setup.py
-# accessed on April 3, 2019.
+from pathlib import Path
 
-# Note: To use the 'upload' functionality of this file, you must:
-#   $ pip install twine
-
-import io
-import os
-import sys
-from shutil import rmtree
-
-from setuptools import Command, setup, find_packages
+from setuptools import find_packages, setup
 
 
 # Package meta-data.
@@ -33,71 +24,66 @@ DESCRIPTION = "A controls-oriented engineering wake model."
 URL = "https://github.com/NREL/FLORIS"
 EMAIL = "rafael.mudafort@nrel.gov"
 AUTHOR = "NREL National Wind Technology Center"
-REQUIRES_PYTHON = ">=3.6.0"
-VERSION = "2.1.1"
+REQUIRES_PYTHON = ">=3.8.0"
 
 # What packages are required for this module to be executed?
 REQUIRED = [
     # simulation
-    "matplotlib>=3",
-    "numpy>=1.16",
-    "pytest>=4",
+    "attrs",
+    "pyyaml",
+    "numexpr",
+    "numpy>=1.20",
     "scipy>=1.1",
-    "coloredlogs>=10.0",
+
     # tools
-    "pandas>=0.24",
-    "pyproj>=2.1",
-    "seaborn>=0.9",
-    "sklearn>=0.0",
+    "matplotlib>=3",
+    "pandas",
+    "shapely",
+
+    # utilities
+    "coloredlogs>=10.0",
+    "flatten_dict",
 ]
 
 # What packages are optional?
+# To use:
+#   pip install -e ".[docs,develop]"    install both sets of extras in editable install
+#   pip install -e ".[develop]"         installs only developer packages in editable install
+#   pip install "floris[develop]"       installs developer packages in non-editable install
 EXTRAS = {
-    "wind_tool_kit": {"h5pyd>=0.3"},
-    "docs": {"readthedocs-sphinx-ext", "Sphinx", "sphinxcontrib-napoleon"},
-    "develop": {"pre-commit", "black", "isort", "flake8"},
+    "docs": {
+        "jupyter-book<=0.13.3",
+        "sphinx-book-theme",
+        "sphinx-autodoc-typehints",
+        "sphinxcontrib-autoyaml",
+        "sphinxcontrib.mermaid",
+    },
+    "develop": {
+        "pytest",
+        "pre-commit",
+        "ruff",
+        "isort",
+    },
 }
 
-# The rest you shouldn't have to touch too much :)
-# ------------------------------------------------
-# Except, perhaps the License and Trove Classifiers!
-# If you do change the License, remember to change the Trove Classifier for that!
-
-here = os.path.abspath(os.path.dirname(__file__))
-
-# Import the README and use it as the long-description.
-# Note: this will only work if 'README.md' is present in your MANIFEST.in file!
-try:
-    with io.open(os.path.join(here, "README.rst"), encoding="utf-8") as f:
-        long_description = "\n" + f.read()
-except FileNotFoundError:
-    long_description = DESCRIPTION
-
-# Load the package's __version__.py module as a dictionary.
-about = {}
-if not VERSION:
-    project_slug = NAME.lower().replace("-", "_").replace(" ", "_")
-    with open(os.path.join(here, project_slug, "__version__.py")) as f:
-        exec(f.read(), about)
-else:
-    about["__version__"] = VERSION
+ROOT = Path(__file__).parent
+with open(ROOT / "floris" / "version.py") as version_file:
+    VERSION = version_file.read().strip()
 
 setup(
     name=NAME,
-    version=about["__version__"],
+    version=VERSION,
     description=DESCRIPTION,
-    long_description=long_description,
+    long_description=DESCRIPTION,
     long_description_content_type="text/markdown",
     author=AUTHOR,
     author_email=EMAIL,
     python_requires=REQUIRES_PYTHON,
     url=URL,
     packages=find_packages(exclude=["tests", "*.tests", "*.tests.*", "tests.*"]),
-    # If your package is a single module, use this instead of 'packages':
-    # py_modules=['mypackage'],
-    # entry_points={
-    #     'console_scripts': ['mycli=mymodule:cli'],
-    # },
+    package_data={
+        'floris': ['turbine_library/*.yaml', 'simulation/wake_velocity/turbopark_lookup_table.mat']
+    },
     install_requires=REQUIRED,
     extras_require=EXTRAS,
     include_package_data=True,
@@ -108,8 +94,10 @@ setup(
         "License :: OSI Approved :: Apache Software License",
         "Programming Language :: Python",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.6",
+        "Programming Language :: Python :: 3.8",
+        "Programming Language :: Python :: 3.9",
+        "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: Implementation :: CPython",
-        "Programming Language :: Python :: Implementation :: PyPy",
+        "Programming Language :: Python :: Implementation :: PyPy"
     ],
 )
