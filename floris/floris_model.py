@@ -1,6 +1,3 @@
-
-from __future__ import annotations
-
 import copy
 import inspect
 from pathlib import Path
@@ -33,6 +30,7 @@ from floris.type_dec import (
     NDArrayStr,
 )
 from floris.utilities import (
+    load_yaml,
     nested_get,
     nested_set,
     print_nested_dict,
@@ -41,6 +39,7 @@ from floris.wind_data import (
     TimeSeries,
     WindDataBase,
     WindRose,
+    WindRoseWRG,
     WindTIRose,
 )
 
@@ -51,18 +50,31 @@ class FlorisModel(LoggingManager):
     underlying methods within the FLORIS framework. It is meant to act as a
     single entry-point for the majority of users, simplifying the calls to
     methods on objects within FLORIS.
-
-    Args:
-        configuration (:py:obj:`dict`): The Floris configuration dictionary or YAML file.
-            The configuration should have the following inputs specified.
-                - **flow_field**: See `floris.simulation.flow_field.FlowField` for more details.
-                - **farm**: See `floris.simulation.farm.Farm` for more details.
-                - **turbine**: See `floris.simulation.turbine.Turbine` for more details.
-                - **wake**: See `floris.simulation.wake.WakeManager` for more details.
-                - **logging**: See `floris.simulation.core.Core` for more details.
     """
 
+    @staticmethod
+    def get_defaults() -> dict:
+        """
+        Load the default FLORIS configuration dictionary.
+
+        Returns:
+            dict: The default FLORIS configuration dictionary.
+        """
+        return copy.deepcopy(load_yaml(Path(__file__).parent / "default_inputs.yaml"))
+
     def __init__(self, configuration: dict | str | Path):
+        """
+        Initialize the FlorisModel object.
+
+        Args:
+            configuration: The Floris configuration dictionary or path to the input YAML file.
+                See floris.default_inputs.yaml for an example of the configuration dictionary
+                or visit https://nrel.github.io/floris/input_reference_main.html.
+        """
+
+        if configuration == "defaults":
+            configuration = FlorisModel.get_defaults()
+
         self.configuration = configuration
 
         if isinstance(self.configuration, (str, Path)):
@@ -94,9 +106,9 @@ class FlorisModel(LoggingManager):
             (np.abs(self.core.flow_field.reference_wind_height - unique_heights[0]) > 1.0e-6
         )):
             err_msg = (
-                "The only unique hub-height is not the equal to the specified reference "
+                "The only unique hub-height is not equal to the specified reference "
                 "wind height. If this was unintended use -1 as the reference hub height to "
-                " indicate use of hub-height as reference wind height."
+                "indicate use of hub-height as reference wind height."
             )
             self.logger.warning(err_msg, stack_info=True)
 
@@ -130,8 +142,9 @@ class FlorisModel(LoggingManager):
         turbine_type: list | None = None,
         turbine_library_path: str | Path | None = None,
         solver_settings: dict | None = None,
-        heterogeneous_inflow_config=None,
+        heterogeneous_inflow_config: dict | None = None,
         wind_data: type[WindDataBase] | None = None,
+        multidim_conditions: dict | None = None,
     ):
         """
         Instantiate a new Floris object with updated conditions set by arguments. Any parameters
@@ -159,7 +172,7 @@ class FlorisModel(LoggingManager):
             turbine_library_path (str | Path | None, optional): Path to the turbine library.
                 Defaults to None.
             solver_settings (dict | None, optional): Solver settings. Defaults to None.
-            heterogeneous_inflow_config (None, optional): heterogeneous inflow configuration.
+            heterogeneous_inflow_config (dict | None, optional): heterogeneous inflow configuration.
                 Defaults to None.
             wind_data (type[WindDataBase] | None, optional): Wind data. Defaults to None.
         """
@@ -168,7 +181,32 @@ class FlorisModel(LoggingManager):
         flow_field_dict = floris_dict["flow_field"]
         farm_dict = floris_dict["farm"]
 
-        #
+        ## Farm
+        if layout_x is not None:
+            farm_dict["layout_x"] = layout_x
+        if layout_y is not None:
+            farm_dict["layout_y"] = layout_y
+        if turbine_type is not None:
+            if reference_wind_height is None:
+                self.logger.warning(
+                    "turbine_type has been changed without specifying a new "
+                    +"reference_wind_height. reference_wind_height remains {0:.2f} m.".format(
+                        flow_field_dict["reference_wind_height"]
+                    )
+                    +f" Consider calling `{self.__class__.__name__}."
+                    +"assign_hub_height_to_ref_height` to update the reference wind height to the "
+                    +"turbine hub height."
+                )
+            farm_dict["turbine_type"] = turbine_type
+        if turbine_library_path is not None:
+            farm_dict["turbine_library_path"] = turbine_library_path
+
+        ## If layout is changed and self._wind_data is not None, update the layout in wind_data
+        if (layout_x is not None) or (layout_y is not None):
+            if self._wind_data is not None:
+                self._wind_data.set_layout(farm_dict["layout_x"], farm_dict["layout_y"])
+
+        # Wind data
         if (
             (wind_directions is not None)
             or (wind_speeds is not None)
@@ -185,14 +223,31 @@ class FlorisModel(LoggingManager):
                 self.logger.warning("Deleting stored wind_data information.")
                 self._wind_data = None
         if wind_data is not None:
-                # Unpack wind data for reinitialization and save wind_data for use in output
-                (
-                    wind_directions,
-                    wind_speeds,
-                    turbulence_intensities,
-                    heterogeneous_inflow_config,
-                ) = wind_data.unpack_for_reinitialize()
-                self._wind_data = wind_data
+
+            # Set the wind data to the current layout
+            wind_data.set_layout(farm_dict["layout_x"], farm_dict["layout_y"])
+
+            # Unpack wind data for reinitialization and save wind_data for use in output
+            (
+                wind_directions,
+                wind_speeds,
+                turbulence_intensities,
+                heterogeneous_inflow_config,
+            ) = wind_data.unpack_for_reinitialize()
+
+            # For backwards compatibility, multidim_conditions are unpacked separately.
+            # multidim_conditions may be included in unpack_for_reinitialize in a future release.
+            if (multidim_conditions is not None
+                and wind_data.unpack_multidim_conditions() is not None):
+                self.logger.warning(
+                    "multidim_conditions passed to reinitialize() and also found in "
+                    "wind_data. Using multidim_conditions from wind_data."
+                )
+                multidim_conditions = wind_data.unpack_multidim_conditions()
+            elif wind_data.unpack_multidim_conditions() is not None:
+                multidim_conditions = wind_data.unpack_multidim_conditions()
+
+            self._wind_data = wind_data
 
         ## FlowField
         if wind_speeds is not None:
@@ -210,17 +265,24 @@ class FlorisModel(LoggingManager):
         if air_density is not None:
             flow_field_dict["air_density"] = air_density
         if heterogeneous_inflow_config is not None:
+            if (
+                "z" in heterogeneous_inflow_config
+                and flow_field_dict["wind_shear"] != 0.0
+                and heterogeneous_inflow_config['z'] is not None
+            ):
+                raise ValueError(
+                    "Heterogeneous inflow configuration contains a z term, and "
+                    "flow_field_dict['wind_shear'] is not 0.0. Combining both options "
+                    "is not currently allowed in FLORIS.  If using a z term in the "
+                    " heterogeneous inflow configuration, set flow_field_dict['wind_shear'] "
+                    "to 0.0."
+                )
+
             flow_field_dict["heterogeneous_inflow_config"] = heterogeneous_inflow_config
 
-        ## Farm
-        if layout_x is not None:
-            farm_dict["layout_x"] = layout_x
-        if layout_y is not None:
-            farm_dict["layout_y"] = layout_y
-        if turbine_type is not None:
-            farm_dict["turbine_type"] = turbine_type
-        if turbine_library_path is not None:
-            farm_dict["turbine_library_path"] = turbine_library_path
+        if multidim_conditions is not None:
+            flow_field_dict["multidim_conditions"] = multidim_conditions
+
 
         if solver_settings is not None:
             floris_dict["solver"] = solver_settings
@@ -349,7 +411,7 @@ class FlorisModel(LoggingManager):
         turbine_type: list | None = None,
         turbine_library_path: str | Path | None = None,
         solver_settings: dict | None = None,
-        heterogeneous_inflow_config=None,
+        heterogeneous_inflow_config: dict | None = None,
         wind_data: type[WindDataBase] | None = None,
         yaw_angles: NDArrayFloat | list[float] | None = None,
         power_setpoints: NDArrayFloat | list[float] | list[float, None] | None = None,
@@ -357,6 +419,7 @@ class FlorisModel(LoggingManager):
         awc_amplitudes: NDArrayFloat | list[float] | list[float, None] | None = None,
         awc_frequencies: NDArrayFloat | list[float] | list[float, None] | None = None,
         disable_turbines: NDArrayBool | list[bool] | None = None,
+        multidim_conditions: dict | None = None,
     ):
         """
         Set the wind conditions and operation setpoints for the wind farm.
@@ -380,7 +443,7 @@ class FlorisModel(LoggingManager):
             turbine_library_path (str | Path | None, optional): Path to the turbine library.
                 Defaults to None.
             solver_settings (dict | None, optional): Solver settings. Defaults to None.
-            heterogeneous_inflow_config (None, optional): heterogeneous inflow configuration.
+            heterogeneous_inflow_config (dict | None, optional): heterogeneous inflow configuration.
                 Defaults to None.
             wind_data (type[WindDataBase] | None, optional): Wind data. Defaults to None.
             yaw_angles (NDArrayFloat | list[float] | None, optional): Turbine yaw angles.
@@ -412,16 +475,14 @@ class FlorisModel(LoggingManager):
             solver_settings=solver_settings,
             heterogeneous_inflow_config=heterogeneous_inflow_config,
             wind_data=wind_data,
+            multidim_conditions=multidim_conditions,
         )
 
         # If the yaw angles or power setpoints are not the default, set them back to the
         # previous setting
         if not (_yaw_angles == 0).all():
             self.core.farm.set_yaw_angles(_yaw_angles)
-        if not (
-            (_power_setpoints == POWER_SETPOINT_DEFAULT)
-            | (_power_setpoints == POWER_SETPOINT_DISABLED)
-        ).all():
+        if not (_power_setpoints == POWER_SETPOINT_DEFAULT).all():
             self.core.farm.set_power_setpoints(_power_setpoints)
         if _awc_modes is not None:
             self.core.farm.set_awc_modes(_awc_modes)
@@ -492,6 +553,7 @@ class FlorisModel(LoggingManager):
 
         turbine_powers = power(
             velocities=self.core.flow_field.u,
+            turbulence_intensities=self.core.flow_field.turbulence_intensity_field[:,:,None,None],
             air_density=self.core.flow_field.air_density,
             power_functions=self.core.farm.turbine_power_functions,
             yaw_angles=self.core.farm.yaw_angles,
@@ -518,7 +580,7 @@ class FlorisModel(LoggingManager):
         turbine_powers = self._get_turbine_powers()
 
         if self.wind_data is not None:
-            if type(self.wind_data) is WindRose:
+            if isinstance(self.wind_data, (WindRose, WindRoseWRG)):
                 turbine_powers_rose = np.full(
                     (len(self.wind_data.wd_flat), self.core.farm.n_turbines),
                     np.nan
@@ -541,6 +603,80 @@ class FlorisModel(LoggingManager):
                     len(self.wind_data.turbulence_intensities),
                     self.core.farm.n_turbines
                 )
+
+        return turbine_powers
+
+    def get_expected_turbine_powers(self, freq=None):
+        """
+        Compute the expected (mean) power of each turbine.
+
+        Args:
+            freq (NDArrayFloat): NumPy array with shape
+                with the frequencies of each wind direction and
+                wind speed combination.  freq is either a 1D array,
+                in which case the same frequencies are used for all
+                turbines, or a 2D array with shape equal to
+                (n_findex, n_turbines), in which case each turbine has a unique
+                set of frequencies (this is the case for example using
+                WindRoseByTurbine).
+
+                    These frequencies should typically sum across rows
+                up to 1.0 and are used to weigh the wind farm power for every
+                condition in calculating the wind farm's AEP. Defaults to None.
+                If None and a WindData object was supplied, the WindData object's
+                frequencies will be used. Otherwise, uniform frequencies are assumed
+                (i.e., a simple mean over the findices is computed).
+        """
+
+        turbine_powers = self._get_turbine_powers()
+
+        if freq is None:
+            if self.wind_data is None:
+                freq = np.array([1.0/self.core.flow_field.n_findex])
+            else:
+                freq = self.wind_data.unpack_freq()
+
+        # If freq is 2d, then use the per turbine frequencies
+        if len(np.shape(freq)) == 2:
+            return np.nansum(np.multiply(freq, turbine_powers), axis=0)
+        else:
+            return np.nansum(np.multiply(freq.reshape(-1, 1), turbine_powers), axis=0)
+
+    def _get_weighted_turbine_powers(
+        self,
+        turbine_weights=None,
+        use_turbulence_correction=False,
+    ):
+        if use_turbulence_correction:
+            raise NotImplementedError(
+                "Turbulence correction is not yet implemented in the power calculation."
+            )
+
+        # Confirm run() has been run
+        if self.core.state is not State.USED:
+            raise RuntimeError(
+                f"Can't run function `{self.__class__.__name__}.get_farm_power` without "
+                f"first running `{self.__class__.__name__}.run`."
+            )
+
+        if turbine_weights is None:
+            # Default to equal weighing of all turbines when turbine_weights is None
+            turbine_weights = np.ones(
+                (
+                    self.core.flow_field.n_findex,
+                    self.core.farm.n_turbines,
+                )
+            )
+        elif len(np.shape(turbine_weights)) == 1:
+            # Deal with situation when 1D array is provided
+            turbine_weights = np.tile(
+                turbine_weights,
+                (self.core.flow_field.n_findex, 1),
+            )
+
+        # Calculate all turbine powers and apply weights
+        turbine_powers = self._get_turbine_powers()
+        turbine_powers = np.multiply(turbine_weights, turbine_powers)
 
         return turbine_powers
 
@@ -577,36 +713,12 @@ class FlorisModel(LoggingManager):
         Returns:
             float: Sum of wind turbine powers in W.
         """
-        if use_turbulence_correction:
-            raise NotImplementedError(
-                "Turbulence correction is not yet implemented in the power calculation."
-            )
 
-        # Confirm run() has been run
-        if self.core.state is not State.USED:
-            raise RuntimeError(
-                "Can't run function `FlorisModel.get_farm_power` without "
-                "first running `FlorisModel.run`."
-            )
 
-        if turbine_weights is None:
-            # Default to equal weighing of all turbines when turbine_weights is None
-            turbine_weights = np.ones(
-                (
-                    self.core.flow_field.n_findex,
-                    self.core.farm.n_turbines,
-                )
-            )
-        elif len(np.shape(turbine_weights)) == 1:
-            # Deal with situation when 1D array is provided
-            turbine_weights = np.tile(
-                turbine_weights,
-                (self.core.flow_field.n_findex, 1),
-            )
-
-        # Calculate all turbine powers and apply weights
-        turbine_powers = self._get_turbine_powers()
-        turbine_powers = np.multiply(turbine_weights, turbine_powers)
+        turbine_powers = self._get_weighted_turbine_powers(
+            turbine_weights=turbine_weights,
+            use_turbulence_correction=use_turbulence_correction
+        )
 
         return np.sum(turbine_powers, axis=1)
 
@@ -646,7 +758,7 @@ class FlorisModel(LoggingManager):
         farm_power = self._get_farm_power(turbine_weights, use_turbulence_correction)
 
         if self.wind_data is not None:
-            if type(self.wind_data) is WindRose:
+            if isinstance(self.wind_data, (WindRose, WindRoseWRG)):
                 farm_power_rose = np.full(len(self.wind_data.wd_flat), np.nan)
                 farm_power_rose[self.wind_data.non_zero_freq_mask] = farm_power
                 farm_power = farm_power_rose.reshape(
@@ -696,15 +808,21 @@ class FlorisModel(LoggingManager):
                 n_turbines). Defaults to None.
         """
 
-        farm_power = self._get_farm_power(turbine_weights=turbine_weights)
-
         if freq is None:
             if self.wind_data is None:
                 freq = np.array([1.0/self.core.flow_field.n_findex])
             else:
                 freq = self.wind_data.unpack_freq()
 
-        return np.nansum(np.multiply(freq, farm_power))
+        # If freq is 1d
+        if len(np.shape(freq)) == 1:
+            farm_power = self._get_farm_power(turbine_weights=turbine_weights)
+            return np.nansum(np.multiply(freq, farm_power))
+        else:
+            weighted_turbine_powers = self._get_weighted_turbine_powers(
+                turbine_weights=turbine_weights,
+            )
+            return np.nansum(np.multiply(freq, weighted_turbine_powers))
 
     def get_farm_AEP(
         self,
@@ -744,11 +862,7 @@ class FlorisModel(LoggingManager):
                 The Annual Energy Production (AEP) for the wind farm in
                 watt-hours.
         """
-        if (
-            freq is None
-            and not isinstance(self.wind_data, WindRose)
-            and not isinstance(self.wind_data, WindTIRose)
-        ):
+        if freq is None and not isinstance(self.wind_data, (WindRose, WindRoseWRG, WindTIRose)):
             self.logger.warning(
                 "Computing AEP with uniform frequencies. Results results may not reflect annual "
                 "operation."
@@ -807,24 +921,26 @@ class FlorisModel(LoggingManager):
             float:
                 The expected value produced by the wind farm in units of value.
         """
-
-        farm_power = self._get_farm_power(turbine_weights=turbine_weights)
-
         if freq is None:
             if self.wind_data is None:
                 freq = np.array([1.0/self.core.flow_field.n_findex])
             else:
                 freq = self.wind_data.unpack_freq()
-
+        # If freq is 1d
+        if len(np.shape(freq)) == 1:
+            farm_power = self._get_farm_power(turbine_weights=turbine_weights)
+            farm_power = np.multiply(freq, farm_power)
+        else:
+            weighted_turbine_powers = self._get_weighted_turbine_powers(
+                turbine_weights=turbine_weights
+            )
+            farm_power = np.nansum(np.multiply(freq, weighted_turbine_powers), axis=1)
         if values is None:
             if self.wind_data is None:
                 values = np.array([1.0])
             else:
                 values = self.wind_data.unpack_value()
-
-        farm_value = np.multiply(values, farm_power)
-
-        return np.nansum(np.multiply(freq, farm_value))
+        return np.nansum(np.multiply(values, farm_power))
 
     def get_farm_AVP(
         self,
@@ -878,6 +994,7 @@ class FlorisModel(LoggingManager):
         if (
             freq is None
             and not isinstance(self.wind_data, WindRose)
+            and not isinstance(self.wind_data, WindRoseWRG)
             and not isinstance(self.wind_data, WindTIRose)
         ):
             self.logger.warning(
@@ -900,6 +1017,7 @@ class FlorisModel(LoggingManager):
     def get_turbine_ais(self) -> NDArrayFloat:
         turbine_ais = axial_induction(
             velocities=self.core.flow_field.u,
+            turbulence_intensities=self.core.flow_field.turbulence_intensity_field[:,:,None,None],
             air_density=self.core.flow_field.air_density,
             yaw_angles=self.core.farm.yaw_angles,
             tilt_angles=self.core.farm.tilt_angles,
@@ -920,6 +1038,7 @@ class FlorisModel(LoggingManager):
     def get_turbine_thrust_coefficients(self) -> NDArrayFloat:
         turbine_thrust_coefficients = thrust_coefficient(
             velocities=self.core.flow_field.u,
+            turbulence_intensities=self.core.flow_field.turbulence_intensity_field[:,:,None,None],
             air_density=self.core.flow_field.air_density,
             yaw_angles=self.core.farm.yaw_angles,
             tilt_angles=self.core.farm.tilt_angles,
@@ -951,6 +1070,23 @@ class FlorisModel(LoggingManager):
             findex (int): The findex to set the floris object to.
             solver_settings (dict): The solver settings to use for visualization.
         """
+
+        # If not None, set the heterogeneous inflow configuration
+        if self.core.flow_field.heterogeneous_inflow_config is not None:
+            heterogeneous_inflow_config = {
+                'x': self.core.flow_field.heterogeneous_inflow_config['x'],
+                'y': self.core.flow_field.heterogeneous_inflow_config['y'],
+                'speed_multipliers':
+                    self.core.flow_field.heterogeneous_inflow_config['speed_multipliers'][findex:findex+1],
+                'interp_method': self.core.flow_field.heterogeneous_inflow_config['interp_method'],
+            }
+            if 'z' in self.core.flow_field.heterogeneous_inflow_config:
+                heterogeneous_inflow_config['z'] = (
+                    self.core.flow_field.heterogeneous_inflow_config['z']
+                )
+        else:
+            heterogeneous_inflow_config = None
+
         self.set(
             wind_speeds=self.wind_speeds[findex:findex+1],
             wind_directions=self.wind_directions[findex:findex+1],
@@ -959,6 +1095,7 @@ class FlorisModel(LoggingManager):
             power_setpoints=self.core.farm.power_setpoints[findex:findex+1,:],
             awc_modes=self.core.farm.awc_modes[findex:findex+1,:],
             awc_amplitudes=self.core.farm.awc_amplitudes[findex:findex+1,:],
+            heterogeneous_inflow_config = heterogeneous_inflow_config,
             solver_settings=solver_settings,
         )
 
@@ -973,11 +1110,11 @@ class FlorisModel(LoggingManager):
     ):
         """
         Shortcut method to instantiate a :py:class:`~.tools.cut_plane.CutPlane`
-        object containing the velocity field in a horizontal plane cut through
-        the simulation domain at a specific height.
+        object containing the velocity field in a vertical plane cut through
+        the simulation domain at a specific downstream (x) distance.
 
         Args:
-            downstream_dist (float): Distance downstream of turbines to compute.
+            downstream_dist (float): Distance downstream to compute.
             y_resolution (float, optional): Output array resolution.
                 Defaults to 200 points.
             z_resolution (float, optional): Output array resolution.
@@ -989,7 +1126,7 @@ class FlorisModel(LoggingManager):
             finder_for_viz (int, optional): Index of the condition to visualize.
         Returns:
             :py:class:`~.tools.cut_plane.CutPlane`: containing values
-            of x, y, u, v, w
+            of y, z, u, v, w
         """
         if self.n_findex > 1 and findex_for_viz is None:
             self.logger.warning(
@@ -1051,7 +1188,7 @@ class FlorisModel(LoggingManager):
                 Defaults to None.
             y_bounds (tuple, optional): Limits of output array (in m).
                 Defaults to None.
-            finder_for_viz (int, optional): Index of the condition to visualize.
+            findex_for_viz (int, optional): Index of the condition to visualize.
 
         Returns:
             :py:class:`~.tools.cut_plane.CutPlane`: containing values
@@ -1109,11 +1246,11 @@ class FlorisModel(LoggingManager):
     ):
         """
         Shortcut method to instantiate a :py:class:`~.tools.cut_plane.CutPlane`
-        object containing the velocity field in a horizontal plane cut through
-        the simulation domain at a specific height.
+        object containing the velocity field in a vertical plane cut through
+        the simulation domain at a specific cross-stream (y) distance.
 
         Args:
-            height (float): Height of cut plane. Defaults to Hub-height.
+            crossstream_dist (float): Cross-stream distance to compute.
             x_resolution (float, optional): Output array resolution.
                 Defaults to 200 points.
             z_resolution (float, optional): Output array resolution.
@@ -1127,7 +1264,7 @@ class FlorisModel(LoggingManager):
 
         Returns:
             :py:class:`~.tools.cut_plane.CutPlane`: containing values
-            of x, y, u, v, w
+            of x, z, u, v, w
         """
         if self.n_findex > 1 and findex_for_viz is None:
             self.logger.warning(
@@ -1154,7 +1291,7 @@ class FlorisModel(LoggingManager):
 
         # Get the points of data in a dataframe
         # TODO this just seems to be flattening and storing the data in a df; is this necessary?
-        # It seems the biggest depenedcy is on CutPlane and the subsequent visualization tools.
+        # It seems the biggest dependency is on CutPlane and the subsequent visualization tools.
         df = fmodel_viz.get_plane_of_points(
             normal_vector="y",
             planar_coordinate=crossstream_dist,
@@ -1265,6 +1402,25 @@ class FlorisModel(LoggingManager):
             raise ValueError("x, y, and z must be the same size")
 
         return self.core.solve_for_points(x, y, z)
+
+    def sample_ti_at_points(self, x: NDArrayFloat, y: NDArrayFloat, z: NDArrayFloat):
+        """
+        Extract the turbulence intensity at points in the flow.
+
+        Args:
+            x (1DArrayFloat | list): x-locations of points where TI is desired.
+            y (1DArrayFloat | list): y-locations of points where TI is desired.
+            z (1DArrayFloat | list): z-locations of points where TI is desired.
+
+        Returns:
+            3DArrayFloat containing turbulence intensity with dimensions
+            (# of findex, # of sample points)
+        """
+
+        self.sample_flow_at_points(x, y, z) # Solve, but ignore returned velocities
+
+        # Remove grid dimensions and return sorted TI field
+        return self.core.flow_field.turbulence_intensity_field_sorted[:, :, 0, 0]
 
     def sample_velocity_deficit_profiles(
         self,
@@ -1432,7 +1588,10 @@ class FlorisModel(LoggingManager):
                 # Set a single one here, then, and return
                 turbine_type = self.core.farm.turbine_definitions[0]
                 turbine_type["operation_model"] = operation_model
-                self.set(turbine_type=[turbine_type])
+                self.set(
+                    turbine_type=[turbine_type],
+                    reference_wind_height=self.reference_wind_height
+                )
                 return
             else:
                 operation_model = [operation_model]*self.core.farm.n_turbines
@@ -1451,11 +1610,19 @@ class FlorisModel(LoggingManager):
             )
             turbine_type_list[tindex]["operation_model"] = operation_model[tindex]
 
-        self.set(turbine_type=turbine_type_list)
+        self.set(
+            turbine_type=turbine_type_list,
+            reference_wind_height=self.reference_wind_height
+        )
 
     def copy(self):
-        """Create an independent copy of the current FlorisModel object"""
-        return FlorisModel(self.core.as_dict())
+        """Create an independent copy of the current FlorisModel object
+
+        When creating the copy, this method uses self.__class__(), rather than FlorisModel()
+        directly, so that subclasses of FlorisModel can inherit this method and return
+        instantiations of their own class, rather than the FlorisModel class.
+        """
+        return self.__class__(self.core.as_dict(), **self.secondary_init_kwargs)
 
     def get_param(
         self,
@@ -1494,7 +1661,7 @@ class FlorisModel(LoggingManager):
         """
         fm_dict_mod = self.core.as_dict()
         nested_set(fm_dict_mod, param, value, param_idx)
-        self.__init__(fm_dict_mod)
+        self.__init__(fm_dict_mod, **self.secondary_init_kwargs)
 
     def get_turbine_layout(self, z=False):
         """
@@ -1514,13 +1681,39 @@ class FlorisModel(LoggingManager):
         else:
             return xcoords, ycoords
 
+    def show_config(self, full=False) -> None:
+        """Print the FlorisModel dictionary.
+        """
+        config_dict = self.core.as_dict()
+        if not full:
+            del config_dict["logging"]
+            del config_dict["wake"]["enable_secondary_steering"]
+            del config_dict["wake"]["enable_yaw_added_recovery"]
+            del config_dict["wake"]["enable_transverse_velocities"]
+            del config_dict["wake"]["enable_active_wake_mixing"]
+            del config_dict["wake"]["wake_deflection_parameters"]
+            del config_dict["wake"]["wake_velocity_parameters"]
+            del config_dict["wake"]["wake_turbulence_parameters"]
+        print_nested_dict(config_dict)
+
     def print_dict(self) -> None:
         """Print the FlorisModel dictionary.
         """
-        print_nested_dict(self.core.as_dict())
-
+        self.logger.warning(
+            "The print_dict() method has been deprecated."
+            " Please use the show_config() method instead."
+        )
+        self.show_config(full=True)
 
     ### Properties
+
+    @property
+    def secondary_init_kwargs(self):
+        """
+        FlorisModel takes only the configuration argument. This method is a placeholder for
+        subclasses of FlorisModel.
+        """
+        return {}
 
     @property
     def layout_x(self):
@@ -1593,6 +1786,16 @@ class FlorisModel(LoggingManager):
         return self.core.farm.n_turbines
 
     @property
+    def reference_wind_height(self):
+        """
+        Reference wind height.
+
+        Returns:
+            float: Reference wind height.
+        """
+        return self.core.flow_field.reference_wind_height
+
+    @property
     def turbine_average_velocities(self) -> NDArrayFloat:
         return average_velocity(
             velocities=self.core.flow_field.u,
@@ -1610,21 +1813,28 @@ class FlorisModel(LoggingManager):
     def calculate_wake(self, **_):
         raise NotImplementedError(
             "The calculate_wake method has been removed. Please use the run method. "
-            "See https://nrel.github.io/floris/v3_to_v4.html for more information."
+            "See https://natlabrockies.github.io/floris/v3_to_v4.html for more information."
         )
 
     def reinitialize(self, **_):
         raise NotImplementedError(
             "The reinitialize method has been removed. Please use the set method. "
-            "See https://nrel.github.io/floris/v3_to_v4.html for more information."
+            "See https://natlabrockies.github.io/floris/v3_to_v4.html for more information."
         )
 
 
     @staticmethod
     def merge_floris_models(fmodel_list, reference_wind_height=None):
-        """Merge a list of FlorisModel objects into a single FlorisModel object. Note that it uses
-        the very first object specified in fmodel_list to build upon,
+        """Merge a list of FlorisModel objects into a single FlorisModel object.
+        Note that it uses the first object specified in fmodel_list to build upon,
         so it uses those wake model parameters, air density, and so on.
+        Currently, this function supports merging the following components of the FLORIS inputs:
+            - farm
+                - layout_x
+                - layout_y
+                - turbine_type
+            - flow_field
+                - reference_wind_height
 
         Args:
             fmodel_list (list): Array-like of FlorisModel objects.
@@ -1641,8 +1851,8 @@ class FlorisModel(LoggingManager):
                 or general solver settings.
         """
 
-        if not isinstance(fmodel_list[0], FlorisModel):
-            raise ValueError(
+        if not all( type(fm) is FlorisModel for fm in fmodel_list ):
+            raise TypeError(
                 "Incompatible input specified. fmodel_list must be a list of FlorisModel objects."
             )
 

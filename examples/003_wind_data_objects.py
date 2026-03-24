@@ -14,7 +14,6 @@ This example demonstrates the use of wind data objects in FLORIS:
 
 """
 
-
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -43,10 +42,11 @@ from floris import (
 
 # Generate wind speeds, directions, turbulence intensities, and values via random signals
 N = 100
-wind_speeds = 8 + 2 * np.random.randn(N)
-wind_directions = 270 + 30 * np.random.randn(N)
-turbulence_intensities = 0.06 + 0.02 * np.random.randn(N)
-values = 25 + 10 * np.random.randn(N)
+rng = np.random.default_rng(0)
+wind_speeds = 8 + 2 * rng.standard_normal(N)
+wind_directions = 270 + 30 * rng.standard_normal(N)
+turbulence_intensities = 0.06 + 0.02 * rng.standard_normal(N)
+values = 25 + 10 * rng.standard_normal(N)
 
 time_series = TimeSeries(
     wind_directions=wind_directions,
@@ -65,7 +65,7 @@ wind_speeds = np.arange(4, 20, 2.0)
 ti_table = 0.06 * np.ones((len(wind_directions), len(wind_speeds)))
 
 # Make value table 25 for all wind directions and speeds
-value_table =25 * np.ones((len(wind_directions), len(wind_speeds)))
+value_table = 25 * np.ones((len(wind_directions), len(wind_speeds)))
 
 # Uniform frequency
 freq_table = np.ones((len(wind_directions), len(wind_speeds)))
@@ -87,7 +87,7 @@ turbulence_intensities = np.arange(0.05, 0.15, 0.01)
 freq_table = np.ones((len(wind_directions), len(wind_speeds), len(turbulence_intensities)))
 
 # Uniform value
-value_table = 25* np.ones((len(wind_directions), len(wind_speeds), len(turbulence_intensities)))
+value_table = 25 * np.ones((len(wind_directions), len(wind_speeds), len(turbulence_intensities)))
 
 wind_ti_rose = WindTIRose(
     wind_directions=wind_directions,
@@ -109,7 +109,7 @@ wind_ti_rose = WindTIRose(
 # For TimeSeries, as long as one condition is given as an array, the other 2
 # conditions can be given as scalars.  The TimeSeries object will broadcast the
 # scalars to the full array (uniform)
-wind_directions = 270 + 30 * np.random.randn(N)
+wind_directions = 270 + 30 * rng.standard_normal(N)
 time_series = TimeSeries(
     wind_directions=wind_directions, wind_speeds=8.0, turbulence_intensities=0.06
 )
@@ -149,15 +149,15 @@ wind_rose_from_csv = WindRose.read_csv_long(
 # Aggregating and Resampling the Wind Rose
 ##################################################
 
-# The aggregate function allows for aggregation of the wind rose data into
+# The downsample function allows for aggregation of the wind rose data into
 # fewer wind direction and wind speed bins.
 # Note it will throw an error if the step sizes passed in are smaller than the
 # step sizes of the original data.
-wind_rose_aggregate = wind_rose.aggregate(wd_step=10, ws_step=2)
+wind_rose_aggregate = wind_rose.downsample(wd_step=10, ws_step=2)
 
-# For upsampling, the resample_by_interpolation function can be used to interpolate
+# For upsampling, the upsample function can be used to interpolate
 # the wind rose data to a finer grid.  It can use either linear or nearest neighbor
-wind_rose_resample = wind_rose.resample_by_interpolation(wd_step=0.5, ws_step=0.25)
+wind_rose_resample = wind_rose.upsample(wd_step=0.5, ws_step=0.25)
 
 ##################################################
 # Setting turbulence intensity
@@ -224,7 +224,7 @@ fmodel.set(wind_data=wind_rose)
 # bins for which frequency is zero are not simulated.  This can be changed by setting the
 # compute_zero_freq_occurrence parameter to True.
 wind_directions = np.array([200.0, 300.0])
-wind_speeds = np.array([5.0, 1.00])
+wind_speeds = np.array([5.0, 10.0])
 freq_table = np.array([[0.5, 0], [0.5, 0]])
 wind_rose = WindRose(
     wind_directions=wind_directions, wind_speeds=wind_speeds, ti_table=0.06, freq_table=freq_table

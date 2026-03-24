@@ -13,6 +13,11 @@ from .yaw_optimization_base import YawOptimization
 
 
 class YawOptimizationSR(YawOptimization, LoggingManager):
+    """
+    Optimize yaw angles using the Serial Refine (SR) optimization method.
+
+    See :cite:`fleming_sr_2022` for full details on the SR method.
+    """
     def __init__(
         self,
         fmodel,
@@ -28,7 +33,36 @@ class YawOptimizationSR(YawOptimization, LoggingManager):
         """
         Instantiate YawOptimizationSR object with a FlorisModel object
         and assign parameter values.
+
+        Args:
+            fmodel: An instantiated FlorisModel object.
+            minimum_yaw_angle: Minimum yaw angle for all turbines [degrees]. Default is 0.0.
+            maximum_yaw_angle: Maximum yaw angle for all turbines [degrees]. Default is 25.0.
+            yaw_angles_baseline: Yaw angles to use as a baseline for comparison to optimized
+               yaw angles [degrees]. If None, defaults to 0.0 for all turbines.
+            x0: Not used in this optimizer. Included for compatibility with base class. Defaults to
+                None.
+            Ny_passes: List of integers defining the number of yaw angles to evaluate
+                per turbine in each pass of the SR algorithm. The length of the list
+                defines the number of passes. The first entry can be even or odd,
+                but all further entries must be even. Default is [5, 4].
+            turbine_weights: Weights for each turbine when calculating the
+                weighted power output during optimization. If None, all turbines
+                are weighted equally. Default is None.
+            exclude_downstream_turbines: Not used in this optimizer. Included for compatibility with
+                base class. Default is True.
+            verify_convergence: If True, the optimizer will perform additional checks to verify
+                that the optimal yaw angles have been found. See
+                YawOptimization._verify_solutions_for_convergence() for more details.
         """
+
+        # Warn if non-default values are provided for unused inputs
+        if x0 is not None:
+            warnings.warn(
+                "The 'x0' argument is not used in the Serial Refine optimization method "
+                "and will be ignored.",
+                UserWarning
+            )
 
         # Initialize base class
         super().__init__(
@@ -58,14 +92,6 @@ class YawOptimizationSR(YawOptimization, LoggingManager):
                     "This is to ensure the same yaw angles are not evaluated twice between passes."
                 )
 
-        # # Set baseline and optimization settings
-        # if reduce_ngrid:
-        #     for ti in range(self.nturbs):
-        #         # Force number of grid points to 2
-        #         self.fmodel.core.farm.turbines[ti].ngrid = 2
-        #         self.fmodel.core.farm.turbines[ti].initialize_turbine()
-        #         print("Reducing ngrid. Unsure if this functionality works!")
-
         # Save optimization choices to self
         self.Ny_passes = Ny_passes
 
@@ -93,6 +119,7 @@ class YawOptimizationSR(YawOptimization, LoggingManager):
         wd_array_subset = self.fmodel_subset.core.flow_field.wind_directions
         ws_array_subset = self.fmodel_subset.core.flow_field.wind_speeds
         ti_array_subset = self.fmodel_subset.core.flow_field.turbulence_intensities
+        power_setpoints_subset = self.fmodel_subset.core.farm.power_setpoints
         turbine_weights_subset = self._turbine_weights_subset
 
         # Reformat yaw_angles_subset, if necessary
@@ -108,6 +135,7 @@ class YawOptimizationSR(YawOptimization, LoggingManager):
             wd_array_subset = np.tile(wd_array_subset, Ny)
             ws_array_subset = np.tile(ws_array_subset, Ny)
             ti_array_subset = np.tile(ti_array_subset, Ny)
+            power_setpoints_subset = np.tile(power_setpoints_subset, (Ny, 1))
             turbine_weights_subset = np.tile(turbine_weights_subset, (Ny, 1))
 
         # Initialize empty matrix for floris farm power outputs
@@ -143,7 +171,8 @@ class YawOptimizationSR(YawOptimization, LoggingManager):
                 ti_array=ti_array_subset[~idx],
                 turbine_weights=turbine_weights_subset[~idx, :],
                 yaw_angles=yaw_angles_subset[~idx, :],
-                heterogeneous_speed_multipliers=het_sm
+                heterogeneous_speed_multipliers=het_sm,
+                power_setpoints=power_setpoints_subset[~idx, :],
             )
             self.time_spent_in_floris += (timerpc() - start_time)
 
@@ -174,13 +203,6 @@ class YawOptimizationSR(YawOptimization, LoggingManager):
         # Get a list of the turbines in order of x and sort front to back
         for iw in range(self._n_findex_subset):
             turbid = self.turbines_ordered_array_subset[iw, turbine_depth]  # Turbine to manipulate
-
-            # # Check if this turbine needs to be optimized. If not, continue
-            # if not self._turbs_to_opt_subset[iw, 0, turbid]:
-            #     continue
-
-            # # Remove turbines that need not be optimized
-            # turbines_ordered = [ti for ti in turbines_ordered if ti in self.turbs_to_opt]
 
             # Grab yaw bounds from self
             yaw_lb = self._yaw_lbs[iw, turbid]
@@ -221,7 +243,7 @@ class YawOptimizationSR(YawOptimization, LoggingManager):
     def optimize(self, print_progress=True):
         """
         Find the yaw angles that maximize the power production for every wind direction,
-        wind speed and turbulence intensity.
+        wind speed and turbulence intensity using the SR optimization algorithm.
         """
         self.print_progress = print_progress
 

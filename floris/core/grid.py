@@ -1,6 +1,3 @@
-
-from __future__ import annotations
-
 from abc import ABC, abstractmethod
 from typing import Iterable
 
@@ -209,7 +206,7 @@ class TurbineGrid(Grid):
         # np.linspace would just return the starting value of -1 * disc_area_radius
         # which would place the point below the center of the rotor.
         if self.grid_resolution == 1:
-            disc_grid = np.zeros((np.shape(disc_area_radius)[0], 1 ))
+            disc_grid = np.zeros((np.shape(disc_area_radius)[0], 1 ),dtype=floris_float_type)
         else:
             disc_grid = np.linspace(
                 -1 * disc_area_radius,
@@ -317,21 +314,28 @@ class TurbineCubatureGrid(Grid):
             ),
             dtype=floris_float_type
         )
-        _x = x[:, :, :, None, None] * template_grid
-        _y = y[:, :, :, None, None] * template_grid
-        _z = z[:, :, :, None, None] * template_grid
+        _x = x[:, :, None, None] * template_grid
+        _y = y[:, :, None, None] * template_grid
+        _z = z[:, :, None, None] * template_grid
+
+        n_coordinates = len(yv)
+        yv = np.broadcast_to(yv, (self.n_findex, self.n_turbines, n_coordinates))
+        yv = np.expand_dims(yv, axis=-1)
+        zv = np.broadcast_to(zv, (self.n_findex, self.n_turbines, n_coordinates))
+        zv = np.expand_dims(zv, axis=-1)
+
         for ti in range(self.n_turbines):
-            _y[:, :, ti, :, :] += yv[None, None, :, None]*self.turbine_diameters[ti] / 2.0
-            _z[:, :, ti, :, :] += zv[None, None, :, None]*self.turbine_diameters[ti] / 2.0
+            _y[:, ti, :, :] += yv[:, ti] * self.turbine_diameters[ti] / 2.0
+            _z[:, ti, :, :] += zv[:, ti] * self.turbine_diameters[ti] / 2.0
 
         # Sort the turbines at each wind direction
 
         # Get the sorted indices for the x coordinates. These are the indices
         # to sort the turbines from upstream to downstream for all wind directions.
         # Also, store the indices to sort them back for when the calculation finishes.
-        self.sorted_indices = _x.argsort(axis=2)
-        self.sorted_coord_indices = x.argsort(axis=2)
-        self.unsorted_indices = self.sorted_indices.argsort(axis=2)
+        self.sorted_indices = _x.argsort(axis=1)
+        self.sorted_coord_indices = x.argsort(axis=1)
+        self.unsorted_indices = self.sorted_indices.argsort(axis=1)
 
         # Put the turbine coordinates into the final arrays in their sorted order
         # These are the coordinates that should be used within the internal calculations
@@ -340,9 +344,16 @@ class TurbineCubatureGrid(Grid):
         self.y_sorted = np.take_along_axis(_y, self.sorted_indices, axis=1)
         self.z_sorted = np.take_along_axis(_z, self.sorted_indices, axis=1)
 
-        self.x = np.take_along_axis(self.x_sorted, self.unsorted_indices, axis=1)
-        self.y = np.take_along_axis(self.y_sorted, self.unsorted_indices, axis=1)
-        self.z = np.take_along_axis(self.z_sorted, self.unsorted_indices, axis=1)
+        # Now calculate grid coordinates in original frame (from 270 deg perspective)
+        self.x_sorted_inertial_frame, self.y_sorted_inertial_frame, self.z_sorted_inertial_frame = \
+            reverse_rotate_coordinates_rel_west(
+                wind_directions=self.wind_directions,
+                grid_x=self.x_sorted,
+                grid_y=self.y_sorted,
+                grid_z=self.z_sorted,
+                x_center_of_rotation=self.x_center_of_rotation,
+                y_center_of_rotation=self.y_center_of_rotation,
+            )
 
     @classmethod
     def get_cubature_coefficients(cls, N: int):
@@ -359,7 +370,7 @@ class TurbineCubatureGrid(Grid):
             integration coefficients, "r", "t", "q", "A" and "B".
         """
 
-        if N < 1 and N < 10:
+        if N < 1 or N > 10:
             raise ValueError(
                 f"Order of cubature integration must be between '1' and '10', given {N}."
             )
